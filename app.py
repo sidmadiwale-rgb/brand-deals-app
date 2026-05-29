@@ -1598,7 +1598,12 @@ with tabs[1]:
     st.markdown("<p class='section-label'>Filter</p>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        statuses = sorted(set(d.get("Status", "") for d in sorted_deals if d.get("Status")))
+        canonical_statuses = ["Pitched", "Locked & Executing",
+            "Completed (India) - Not Invoiced", "Completed (Not-India) - Not Invoiced",
+            "Invoiced (India)", "Invoiced (Non-India)", "Paid",
+            "Partially Delivered", "Overdue"]
+        present = set(d.get("Status", "") for d in sorted_deals if d.get("Status"))
+        statuses = canonical_statuses + sorted(present - set(canonical_statuses))
         status_f = st.multiselect("Status", statuses, key="bd_status_filter")
     with c2:
         regions = sorted(set(d.get("Region", "") for d in sorted_deals if d.get("Region")))
