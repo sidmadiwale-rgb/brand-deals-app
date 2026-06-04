@@ -412,10 +412,31 @@ _CPV_LEGEND_HTML = (
     "</div>"
 )
 
+# === Privacy mode ============================================================
+# When ON, every currency/money figure in the UI is masked with dots (e.g.
+# "$ ••••"). Non-money data (CPV/CPM/CPE, view counts, %, deal counts, dates)
+# stays visible. State lives in st.session_state["privacy_mode"] and is mirrored
+# into the URL query param ?priv=1 so it survives page reloads on this device.
+PRIVACY_MASK = "••••"
+
+def privacy_on():
+    return st.session_state.get("privacy_mode", False)
+
+def _privacy_symbol(currency):
+    c = (currency or "").upper()
+    if c == "INR": return "₹"
+    if c == "AED": return "د.إ"
+    return "$"
+
+def mask_money(currency="AUD"):
+    """The masked stand-in for any currency amount, keeping the currency symbol."""
+    return f"{_privacy_symbol(currency)} {PRIVACY_MASK}"
+
 def format_rate_chip(currency, rate_orig):
     """Format a rate in original currency for display (e.g. '₹5.00L', 'USD $15,000')."""
     if rate_orig is None or rate_orig == "" or rate_orig == 0:
         return ""
+    if privacy_on(): return mask_money(currency)
     try: r = float(rate_orig)
     except: return ""
     cur = (currency or "").upper()
@@ -502,6 +523,7 @@ def get_display_mult(currency, fx_rates):
     return 1.0 / rate if rate else 1.0
 
 def format_inr(amt):
+    if privacy_on(): return mask_money("INR")
     amt = int(round(amt))
     if amt < 0: return "-" + format_inr(-amt)
     s = str(amt)
@@ -514,6 +536,7 @@ def format_inr(amt):
 
 def format_inr_compact(amt):
     """Format INR amount with auto L/Cr abbreviation. Used in Charts tab."""
+    if privacy_on(): return mask_money("INR")
     if amt is None: amt = 0
     if amt < 0: return "-" + format_inr_compact(-amt)
     if amt >= 10000000:
@@ -521,12 +544,14 @@ def format_inr_compact(amt):
     return f"₹{amt/100000:.1f}L"
 
 def format_money(amt, currency="AUD"):
+    if privacy_on(): return mask_money(currency)
     if amt is None: amt = 0
     if currency == "INR": return format_inr(amt)
     elif currency == "AED": return f"د.إ {amt:,.0f}"
     else: return f"${amt:,.0f}"
 
 def format_original_currency(gross_orig, currency):
+    if privacy_on(): return mask_money(currency)
     if currency == "INR":
         if gross_orig >= 100000: return f"₹{gross_orig/100000:.1f}L"
         return f"₹{gross_orig:,.0f}"
@@ -595,27 +620,34 @@ def base_layout(height=200):
         yaxis=dict(showgrid=True, gridcolor="#27272A", tickfont=dict(size=9), zeroline=False),
         showlegend=False, bargap=0.4)
 
-def make_bar_chart(df, x_col, y_col, color, faded_indices=None, label_prefix="", label_suffix=""):
+def make_bar_chart(df, x_col, y_col, color, faded_indices=None, label_prefix="", label_suffix="", mask=False):
     colors = [color] * len(df)
     if faded_indices:
         for i in faded_indices:
             if 0 <= i < len(colors): colors[i] = "#3F3F46"
+    hover = ("<b>%{x}</b><br>" + PRIVACY_MASK + "<extra></extra>") if mask \
+        else f"<b>%{{x}}</b><br>{label_prefix}%{{y:,.1f}}{label_suffix}<extra></extra>"
     fig = go.Figure(data=[go.Bar(x=df[x_col], y=df[y_col],
         marker=dict(color=colors, line=dict(width=0)),
-        hovertemplate=f"<b>%{{x}}</b><br>{label_prefix}%{{y:,.1f}}{label_suffix}<extra></extra>")])
+        hovertemplate=hover)])
     fig.update_layout(**base_layout())
+    if mask:
+        fig.update_yaxes(showticklabels=False)
     return fig
 
-def make_split_bar_chart(df, x_col, y1_col, y2_col, name1, name2):
+def make_split_bar_chart(df, x_col, y1_col, y2_col, name1, name2, mask=False):
+    hover = ("<b>%{x}</b><br>" + PRIVACY_MASK + "<extra></extra>") if mask else None
     fig = go.Figure(data=[
-        go.Bar(name=name1, x=df[x_col], y=df[y1_col], marker=dict(color="#EF4444", line=dict(width=0))),
-        go.Bar(name=name2, x=df[x_col], y=df[y2_col], marker=dict(color="#3B82F6", line=dict(width=0)))])
+        go.Bar(name=name1, x=df[x_col], y=df[y1_col], marker=dict(color="#EF4444", line=dict(width=0)), hovertemplate=hover),
+        go.Bar(name=name2, x=df[x_col], y=df[y2_col], marker=dict(color="#3B82F6", line=dict(width=0)), hovertemplate=hover)])
     layout = base_layout(height=220)
     layout.update(dict(barmode="group", showlegend=True,
         legend=dict(orientation="h", yanchor="top", y=1.15, x=0,
                     bgcolor="rgba(0,0,0,0)", font=dict(size=10, color="#A1A1AA")),
         bargroupgap=0.1))
     fig.update_layout(**layout)
+    if mask:
+        fig.update_yaxes(showticklabels=False)
     return fig
 
 _CURRENCY_SYMBOLS = {"INR": "₹", "USD": "$", "AED": "AED ", "AUD": "A$"}
@@ -623,7 +655,7 @@ _CURRENCY_SYMBOLS = {"INR": "₹", "USD": "$", "AED": "AED ", "AUD": "A$"}
 def _currency_symbol(cur):
     return _CURRENCY_SYMBOLS.get((cur or "").upper(), "$")
 
-def make_hbar_chart(df, x_col, y_col, color="#FAFAFA", currency_symbol="$", precision=0, label_suffix="", color_map=None, ascending=True):
+def make_hbar_chart(df, x_col, y_col, color="#FAFAFA", currency_symbol="$", precision=0, label_suffix="", color_map=None, ascending=True, mask=False):
     # Plotly draws the first row at the bottom for horizontal bars, so ascending=True
     # puts the largest value on top. Pass ascending=False to put the smallest (best CPV) on top.
     df = df.sort_values(x_col, ascending=ascending)
@@ -632,13 +664,19 @@ def make_hbar_chart(df, x_col, y_col, color="#FAFAFA", currency_symbol="$", prec
         bar_colors = [color_map.get(v, color) for v in df[y_col]]
     else:
         bar_colors = color
+    hover = ("<b>%{y}</b><br>" + PRIVACY_MASK + "<extra></extra>") if mask \
+        else f"<b>%{{y}}</b><br>{currency_symbol}%{{x:{fmt}}}{label_suffix}<extra></extra>"
     fig = go.Figure(data=[go.Bar(x=df[x_col], y=df[y_col], orientation="h",
         marker=dict(color=bar_colors, line=dict(width=0)),
-        hovertemplate=f"<b>%{{y}}</b><br>{currency_symbol}%{{x:{fmt}}}{label_suffix}<extra></extra>")])
+        hovertemplate=hover)])
     layout = base_layout(height=260)
-    layout["xaxis"] = dict(showgrid=True, gridcolor="#27272A",
-                            tickfont=dict(size=9, color="#A1A1AA"), zeroline=False,
-                            tickprefix=currency_symbol, tickformat=fmt, ticksuffix=label_suffix)
+    if mask:
+        layout["xaxis"] = dict(showgrid=True, gridcolor="#27272A", zeroline=False,
+                                showticklabels=False)
+    else:
+        layout["xaxis"] = dict(showgrid=True, gridcolor="#27272A",
+                                tickfont=dict(size=9, color="#A1A1AA"), zeroline=False,
+                                tickprefix=currency_symbol, tickformat=fmt, ticksuffix=label_suffix)
     layout["yaxis"] = dict(showgrid=False, tickfont=dict(size=11, color="#FAFAFA"))
     fig.update_layout(**layout)
     return fig
@@ -666,11 +704,26 @@ for k, v in [("period_mode", "FY"), ("period_year", "FY26"),
     if k not in st.session_state:
         st.session_state[k] = v
 
+# Privacy mode is remembered per-device via the ?priv=1 URL query param so it
+# stays on across page reloads. Seed the session flag from the URL on first load.
+if "privacy_mode" not in st.session_state:
+    st.session_state["privacy_mode"] = (st.query_params.get("priv") == "1")
+
+def _sync_privacy_qp():
+    """Mirror the toggle into the URL so a reload restores the same state."""
+    if st.session_state.get("privacy_mode"):
+        st.query_params["priv"] = "1"
+    elif "priv" in st.query_params:
+        del st.query_params["priv"]
+
 def render_global_header():
-    c1, c2 = st.columns([3, 1])
+    c1, c2, c3 = st.columns([2.2, 1.5, 1.1])
     with c1:
         st.markdown("<p class='brand'>Priya Sid Enterprise</p>", unsafe_allow_html=True)
     with c2:
+        st.toggle("🔒 Hide $", key="privacy_mode", on_change=_sync_privacy_qp,
+                  help="Privacy mode — hide all money figures (CPV, views & % stay visible)")
+    with c3:
         cur_options = ["AUD", "USD", "INR", "AED"]
         if st.session_state.display_currency not in cur_options:
             st.session_state.display_currency = "AUD"
@@ -1664,6 +1717,7 @@ with tabs[2]:
     cur_symbol = _CURRENCY_SYMBOLS.get(display_cur, "$")
     def fmt_total_disp(amt):
         """Format an amount already in display currency (uses L/Cr for INR)."""
+        if privacy_on(): return mask_money(display_cur)
         if display_cur == "INR":
             return format_inr_compact(amt)
         if display_cur == "AED":
@@ -1703,7 +1757,7 @@ with tabs[2]:
             suffix = "L"
         st.plotly_chart(
             make_bar_chart(df, "Month", "Value", color, faded_indices=faded,
-                            label_prefix=cur_symbol, label_suffix=suffix),
+                            label_prefix=cur_symbol, label_suffix=suffix, mask=privacy_on()),
             use_container_width=True, config={"displayModeBar": False})
 
     # === Chart 1: Monthly Gross — Brand Deals (All Regions) ===
@@ -1755,7 +1809,7 @@ with tabs[2]:
         st.plotly_chart(
             make_hbar_chart(df_region, "Value", "Region",
                             currency_symbol=cur_symbol, label_suffix=suffix_h,
-                            color_map=region_colors),
+                            color_map=region_colors, mask=privacy_on()),
             use_container_width=True, config={"displayModeBar": False})
 
     # === Chart 6: Top Brands — Roll-up ===
@@ -1772,7 +1826,7 @@ with tabs[2]:
         suffix_h = "L" if display_cur == "INR" else ""
         st.plotly_chart(
             make_hbar_chart(df_top, "Value", "Brand",
-                            currency_symbol=cur_symbol, label_suffix=suffix_h),
+                            currency_symbol=cur_symbol, label_suffix=suffix_h, mask=privacy_on()),
             use_container_width=True, config={"displayModeBar": False})
 
     # === Chart 7: Ad Revenue — Monthly (moved to bottom) ===
@@ -1787,7 +1841,7 @@ with tabs[2]:
     df_ad = pd.DataFrame(rows)
     ar_avg = (ad_total_aud * mult) / max(ad_months_with_data, 1)
     st.markdown(f"<div style='font-size:11px;color:#A1A1AA;text-align:right;margin-bottom:6px'>Avg {fmt_total_disp(ar_avg)} / month (÷{ad_months_with_data})</div>", unsafe_allow_html=True)
-    st.plotly_chart(make_split_bar_chart(df_ad, "Month", "YouTube", "Facebook", "YouTube (AUD)", "Facebook (AUD eq)"),
+    st.plotly_chart(make_split_bar_chart(df_ad, "Month", "YouTube", "Facebook", "YouTube (AUD)", "Facebook (AUD eq)", mask=privacy_on()),
                      use_container_width=True, config={"displayModeBar": False})
 
 with tabs[3]:
@@ -1813,12 +1867,14 @@ with tabs[3]:
         has_data = ar["total_aud"] > 0
         safe_key = ar["month"].replace(" ", "_")
         if has_data:
+            yt_str = f"$ {PRIVACY_MASK}" if privacy_on() else f"${ar['yt_aud']:,.0f}"
+            fb_str = f"$ {PRIVACY_MASK} USD" if privacy_on() else f"${ar['fb_usd']:,.0f} USD"
             st.markdown(f"<div class='deal-card card-overlay-trigger'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center'>"
                 f"<div><div class='month-name'>{ar['month']}</div>"
                 f"<div style='font-size:11px;color:#A1A1AA;margin-top:2px'>"
-                f"<span style='color:#FCA5A5'>YT ${ar['yt_aud']:,.0f}</span>  "
-                f"<span style='color:#93C5FD'>FB ${ar['fb_usd']:,.0f} USD</span></div></div>"
+                f"<span style='color:#FCA5A5'>YT {yt_str}</span>  "
+                f"<span style='color:#93C5FD'>FB {fb_str}</span></div></div>"
                 f"<div class='month-total'>{format_money(ar['total_aud'] * mult, display_cur)}</div></div></div>",
                 unsafe_allow_html=True)
         else:
