@@ -72,6 +72,39 @@ _INJECT_HTML = """
 """
 components.html(_INJECT_HTML.replace("__REMOTE_URL__", _ICON_REMOTE_URL), height=0)
 
+# Persist privacy mode on the device. The Streamlit side reads ?priv=1 from the
+# URL, but a fresh app open (new tab / reopened from the home screen) has no
+# query string, so we also stash the last state in localStorage and, on the
+# first load of a browser session, restore it by re-adding ?priv=1 and reloading
+# (hiding the page first so figures never flash). Within a session we just mirror
+# the current explicit state back into localStorage.
+_PRIVACY_PERSIST_JS = """
+<script>
+(function(){
+  try {
+    var pwin = window.parent;
+    var ploc = pwin.location;
+    var params = new URLSearchParams(ploc.search);
+    var paramOn = params.get('priv') === '1';
+    var stored = null, inited = null;
+    try { stored = pwin.localStorage.getItem('bd_priv'); } catch(e){}
+    try { inited = pwin.sessionStorage.getItem('bd_priv_init'); } catch(e){}
+    if (!inited) {
+      try { pwin.sessionStorage.setItem('bd_priv_init','1'); } catch(e){}
+      if (stored === '1' && !paramOn) {
+        try { pwin.document.documentElement.style.visibility = 'hidden'; } catch(e){}
+        params.set('priv','1');
+        ploc.search = params.toString();
+        return;
+      }
+    }
+    try { pwin.localStorage.setItem('bd_priv', paramOn ? '1' : '0'); } catch(e){}
+  } catch(e) {}
+})();
+</script>
+"""
+components.html(_PRIVACY_PERSIST_JS, height=0)
+
 SHEET_ID = "1KywyIay918fxbY-GjTe2QGwwS5Vzek2ALxFN-QK2Ujk"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
           "https://www.googleapis.com/auth/drive"]
