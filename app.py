@@ -655,8 +655,10 @@ _CURRENCY_SYMBOLS = {"INR": "₹", "USD": "$", "AED": "AED ", "AUD": "A$"}
 def _currency_symbol(cur):
     return _CURRENCY_SYMBOLS.get((cur or "").upper(), "$")
 
-def make_hbar_chart(df, x_col, y_col, color="#FAFAFA", currency_symbol="$", precision=0, label_suffix="", color_map=None, mask=False):
-    df = df.sort_values(x_col, ascending=True)
+def make_hbar_chart(df, x_col, y_col, color="#FAFAFA", currency_symbol="$", precision=0, label_suffix="", color_map=None, ascending=True, mask=False):
+    # Plotly draws the first row at the bottom for horizontal bars, so ascending=True
+    # puts the largest value on top. Pass ascending=False to put the smallest (best CPV) on top.
+    df = df.sort_values(x_col, ascending=ascending)
     fmt = (f".{precision}f" if precision and precision > 0 else ",.0f")
     if color_map:
         bar_colors = [color_map.get(v, color) for v in df[y_col]]
@@ -1542,8 +1544,8 @@ def campaign_detail_dialog(camp_dict):
             yt_v = _safe_int(p.get("YT Views"))
             tt_v = _safe_int(p.get("TT Views"))
             post_total = ig_v + yt_v + tt_v
-            ig_likes_n = _safe_int(p.get("IG Likes"))
-            ig_comments_n = _safe_int(p.get("IG Comments"))
+            post_likes = (_safe_int(p.get("IG Likes")) + _safe_int(p.get("YT Likes")) + _safe_int(p.get("TT Likes")))
+            post_comments = (_safe_int(p.get("IG Comments")) + _safe_int(p.get("YT Comments")) + _safe_int(p.get("TT Comments")))
             platforms = []
             if p.get("IG URL") or ig_v: platforms.append("<i class='ti ti-brand-instagram' style='color:#1877F2;font-size:15px;vertical-align:-2px'></i>")
             if p.get("YT URL") or yt_v: platforms.append("<i class='ti ti-brand-youtube' style='color:#E24B4A;font-size:15px;vertical-align:-2px'></i>")
@@ -1557,9 +1559,9 @@ def campaign_detail_dialog(camp_dict):
                         f"<div style='display:flex;gap:14px;padding-top:6px;border-top:1px solid #27272A'>"
                         f"<div><div style='font-size:14px;font-weight:500;color:#E89E7E'>{format_compact_int(post_total)}</div>"
                         f"<div style='font-size:9px;color:#A1A1AA;text-transform:uppercase'>Views</div></div>"
-                        f"<div><div style='font-size:14px;font-weight:500;color:#FAFAFA'>{format_compact_int(ig_likes_n)}</div>"
+                        f"<div><div style='font-size:14px;font-weight:500;color:#FAFAFA'>{format_compact_int(post_likes)}</div>"
                         f"<div style='font-size:9px;color:#A1A1AA;text-transform:uppercase'>Likes</div></div>"
-                        f"<div><div style='font-size:14px;font-weight:500;color:#FAFAFA'>{format_compact_int(ig_comments_n)}</div>"
+                        f"<div><div style='font-size:14px;font-weight:500;color:#FAFAFA'>{format_compact_int(post_comments)}</div>"
                         f"<div style='font-size:9px;color:#A1A1AA;text-transform:uppercase'>Comments</div></div></div></div>",
                         unsafe_allow_html=True)
             post_sr = int(p.get("_sheet_row", 0))
@@ -2120,7 +2122,7 @@ with tabs[5]:
                             unsafe_allow_html=True)
                 top_df = pd.DataFrame([{"Name": c["camp"].get("Campaign Name", "")[:30], "CPV": c["agg"]["cpv"]} for c in top5])
                 if not top_df.empty:
-                    st.plotly_chart(make_hbar_chart(top_df, "CPV", "Name", color="#97C459", currency_symbol=chart_sym, precision=4),
+                    st.plotly_chart(make_hbar_chart(top_df, "CPV", "Name", color="#97C459", currency_symbol=chart_sym, precision=4, ascending=False),
                                     use_container_width=True, config={"displayModeBar": False})
                 if bot5:
                     st.markdown("<p style='font-size:10px;color:#E24B4A;text-transform:uppercase;letter-spacing:0.4px;margin:8px 0 4px'>Bottom 5 (worst CPV)</p>",
@@ -2136,5 +2138,50 @@ with tabs[5]:
                 brand_avg = sorted([(b, sum(v)/len(v)) for b, v in brand_cpvs.items()], key=lambda x: x[1])
                 if brand_avg:
                     bb_df = pd.DataFrame([{"Brand": b, "CPV": cpv} for b, cpv in brand_avg])
-                    st.plotly_chart(make_hbar_chart(bb_df, "CPV", "Brand", color="#E89E7E", currency_symbol=chart_sym, precision=4),
+                    bb_colors = {b: cpv_color(cpv, chart_currency, fx_rates) for b, cpv in brand_avg}
+                    st.plotly_chart(make_hbar_chart(bb_df, "CPV", "Brand", currency_symbol=chart_sym, precision=4, color_map=bb_colors),
                                     use_container_width=True, config={"displayModeBar": False})
+
+        # --- CPV · HUL Brands (always shown — independent of the filters above) ---
+        def _hul_brand_label(name):
+            b = str(name).replace("(HUL)", "").strip()
+            low = b.lower()
+            if low.startswith("simple"):   return "Simple"
+            if low.startswith("vaseline"): return "Vaseline"
+            if low.startswith("knorr"):    return "Knorr"
+            return b
+        hul_camps = [c for c in all_camps
+                     if str(c["camp"].get("Deal Group", "")).strip().upper() == "HUL"
+                     and (c["camp"].get("Currency", "") or "").upper() == "INR"
+                     and c["agg"]["cpv"] > 0]
+        if hul_camps:
+            hul_by_brand = defaultdict(list)
+            for c in hul_camps:
+                hul_by_brand[_hul_brand_label(c["camp"].get("Brand", "Unknown"))].append(c["agg"]["cpv"])
+            hul_brand_avg = sorted([(b, sum(v) / len(v)) for b, v in hul_by_brand.items()], key=lambda x: x[1])
+            hul_cpvs = sorted(c["agg"]["cpv"] for c in hul_camps)
+            n_hul = len(hul_cpvs)
+            hul_avg = sum(hul_cpvs) / n_hul
+            hul_med = (hul_cpvs[n_hul // 2] if n_hul % 2
+                       else (hul_cpvs[n_hul // 2 - 1] + hul_cpvs[n_hul // 2]) / 2)
+            hul_sym = _currency_symbol("INR")
+            st.markdown("<p class='section-label'>CPV · HUL Brands · INR</p>", unsafe_allow_html=True)
+            st.markdown(tile_grid_html([
+                {"label": "HUL Avg CPV", "value": format_cpv(hul_avg, "INR"), "color": cpv_color(hul_avg, "INR", fx_rates)},
+                {"label": "HUL Median CPV", "value": format_cpv(hul_med, "INR"), "color": cpv_color(hul_med, "INR", fx_rates)},
+            ]), unsafe_allow_html=True)
+            hul_df = pd.DataFrame([{"Brand": b, "CPV": cpv} for b, cpv in hul_brand_avg])
+            hul_colors = {b: cpv_color(cpv, "INR", fx_rates) for b, cpv in hul_brand_avg}
+            hul_fig = make_hbar_chart(hul_df, "CPV", "Brand", currency_symbol=hul_sym,
+                                      precision=4, color_map=hul_colors, ascending=False)
+            hul_fig.add_vline(x=hul_avg, line_color="#E89E7E", line_width=2, line_dash="dash",
+                              annotation_text=f"avg {hul_sym}{hul_avg:.3f}", annotation_position="top",
+                              annotation_font_size=10, annotation_font_color="#E89E7E")
+            hul_fig.add_vline(x=hul_med, line_color="#60A5FA", line_width=2, line_dash="dot",
+                              annotation_text=f"med {hul_sym}{hul_med:.3f}", annotation_position="bottom",
+                              annotation_font_size=10, annotation_font_color="#60A5FA")
+            st.plotly_chart(hul_fig, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(f"<p style='font-size:10px;color:#71717A;margin-top:8px'>"
+                        f"Avg &amp; median across all {n_hul} HUL campaigns · {len(hul_brand_avg)} brands · all FY</p>",
+                        unsafe_allow_html=True)
+            st.markdown(_CPV_LEGEND_HTML, unsafe_allow_html=True)
